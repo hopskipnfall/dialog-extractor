@@ -165,12 +165,15 @@ func main() {
 
 	comb := readAndCombineSubtitles(tempDir + "subs.srt")
 
+	mp3ScratchPath := tempDir + "full_audio.mp3"
+	_, err = runShellCommand("ffmpeg", "-y", "-i", vidPath, "-q:a", "0", "-map", "a", mp3ScratchPath)
+
 	outFile := ""
 	for i := 0; i < len(comb); i++ {
 		cur := comb[i]
 		fname := "file-" + fmt.Sprint(i) + ".mp3"
 		outFile = outFile + "file '" + fname + "'" + "\n"
-		_, err = runShellCommand("ffmpeg", "-y", "-i", vidPath, "-ss", cur.start, "-to", cur.end, "-q:a", "0", "-map", "a", tempDir+fname)
+		_, err = runShellCommand("ffmpeg", "-y", "-i", mp3ScratchPath, "-ss", cur.start, "-to", cur.end, "-q:a", "0", "-map", "a", tempDir+fname)
 		if err != nil {
 			return
 		}
