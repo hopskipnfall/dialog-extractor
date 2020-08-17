@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	tempDir = "./tmp_new/"
+	tempDir = "./tmp/"
 	logPath = "./log.txt"
 
 	timestampFormat = "15:04:05.000"
@@ -156,7 +156,7 @@ func main() {
 	vidPath := os.Args[1]
 
 	re2, _ := regexp.Compile(`.*/([^/]+).mkv`)
-	audioOutPath := re2.ReplaceAllString(vidPath, `$1.aac`)
+	audioOutPath := re2.ReplaceAllString(vidPath, `$1.mp3`)
 
 	_, err := runShellCommand("ffmpeg", "-y", "-i", vidPath, "-map", "0:s:0", tempDir+"subs.srt")
 	if err != nil {
@@ -168,9 +168,9 @@ func main() {
 	outFile := ""
 	for i := 0; i < len(comb); i++ {
 		cur := comb[i]
-		fname := "file-" + fmt.Sprint(i) + ".aac"
+		fname := "file-" + fmt.Sprint(i) + ".mp3"
 		outFile = outFile + "file '" + fname + "'" + "\n"
-		_, err = runShellCommand("ffmpeg", "-y", "-i", vidPath, "-ss", cur.start, "-to", cur.end, "-c", "copy", tempDir+fname)
+		_, err = runShellCommand("ffmpeg", "-y", "-i", vidPath, "-ss", cur.start, "-to", cur.end, "-q:a", "0", "-map", "a", tempDir+fname)
 		if err != nil {
 			return
 		}
@@ -180,7 +180,7 @@ func main() {
 		panic(err)
 	}
 
-	if _, err = runShellCommand("ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", tempDir+"output.txt", "-c", "copy", audioOutPath); err != nil { //combined.aac
+	if _, err = runShellCommand("ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", tempDir+"output.txt", "-c", "copy", audioOutPath); err != nil {
 		panic(err)
 	}
 
