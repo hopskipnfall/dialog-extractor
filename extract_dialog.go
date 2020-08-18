@@ -79,9 +79,9 @@ func main() {
 		l.Println("Found multiple audio tracks:")
 		for i := 0; i < len(s); i++ {
 			cur := s[i]
-			l.Printlnf("\t%d: Title: %s (%s)", i, cur.Tags.Title, cur.Tags.Language)
+			l.Printlnf("\tOption %d: %s (%s)", i, cur.Tags.Title, cur.Tags.Language)
 		}
-		choice := requestInt("Choose number: ", 0, len(s)-1)
+		choice := requestInt("Choose option: ", 0, len(s)-1)
 		c.Audio = s[choice]
 	}
 
@@ -99,9 +99,9 @@ func main() {
 		l.Println("Found multiple subtitle tracks:")
 		for i := 0; i < len(s); i++ {
 			cur := s[i]
-			l.Printlnf("\t%d: Title: %s (%s)", i, cur.Tags.Title, cur.Tags.Language)
+			l.Printlnf("\tOption %d: %s (%s)", i, cur.Tags.Title, cur.Tags.Language)
 		}
-		choice := requestInt("Choose number: ", 0, len(s)-1)
+		choice := requestInt("Choose option: ", 0, len(s)-1)
 		c.Subtitles = s[choice]
 	}
 
@@ -109,7 +109,6 @@ func main() {
 
 	// Write to log file.
 	l.WriteToFile()
-	l.Println("Action complete.")
 }
 
 func processFile(vidPath string, c Configuration) {
@@ -167,6 +166,8 @@ func processFile(vidPath string, c Configuration) {
 
 	// Delete temp dir.
 	os.RemoveAll(tempDir)
+
+	l.Printlnf("Action completed. Created file %s", tempDir+audioOutPath)
 }
 
 // Interval represents a time interval over which subtitles are displayed.
@@ -258,8 +259,9 @@ func requestInt(message string, min, max int) int {
 		choice, err := strconv.Atoi(text)
 		if err != nil || choice < min || choice > max {
 			l.Println("illegal choice, try again.")
+		} else {
+			return choice
 		}
-		return choice
 	}
 	panic("this is impossible")
 }
