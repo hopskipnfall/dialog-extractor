@@ -87,7 +87,7 @@ func Test_combineIntervals(t *testing.T) {
 	}
 }
 
-func Test_gapOverThreshold(t *testing.T) {
+func Test_isGapOverThreshold(t *testing.T) {
 	type args struct {
 		start        string
 		end          string
@@ -137,7 +137,7 @@ func Test_gapOverThreshold(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := gapOverThreshold(tt.args.start, tt.args.end, tt.args.gapThreshold); got != tt.want {
+			if got := isGapOverThreshold(tt.args.start, tt.args.end, tt.args.gapThreshold); got != tt.want {
 				t.Errorf("gapOverThreshold() = %v, want %v", got, tt.want)
 			}
 		})

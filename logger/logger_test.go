@@ -5,7 +5,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	target := New()
+	target := New(nil)
 
 	target.Print("Hey you!")
 

@@ -15,18 +15,22 @@ import (
 )
 
 const (
-	tempDir = "./tmp/"
+	tempDir   = "./.tmp/"
+	outputDir = "./out/"
 
 	timestampFormat = "15:04:05.000"
 )
 
 var (
-	re        = regexp.MustCompile(`^([^,]+),([^ ]+) --> ([^,]+),([^ ]+)$`)
-	logOutput = ""
-	// Threshold between dialog that will result in the silence being trimmed.
-	threshold, _ = time.ParseDuration("1s")
-	logPath      = "./log.txt"
-	l            = logger.New(&logPath)
+	srtTimingRegex = regexp.MustCompile(`^([^,]+),([^ ]+) --> ([^,]+),([^ ]+)$`)
+	videoPathRegex = regexp.MustCompile(`.*/([^/]+).mkv`)
+
+	// Threshold for trimming a gap between dialog segments.
+	threshold, _ = time.ParseDuration("1.5s")
+
+	// Logging.
+	logPath = "./log.txt"
+	l       = logger.New(&logPath)
 )
 
 func runShellCommand(name string, arg ...string) ([]byte, error) {
@@ -41,23 +45,29 @@ func runShellCommand(name string, arg ...string) ([]byte, error) {
 	return out, err
 }
 
-// Interval represents a time interval over which subtitles are displayed.
-type Interval struct {
-	start string
-	end   string
-}
-
 func main() {
+	// Create directories if needed.
 	if _, err := os.Stat(tempDir); os.IsNotExist(err) {
 		os.Mkdir(tempDir, 0755)
 	}
+	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
+		os.Mkdir(outputDir, 0755)
+	}
 
-	// First parameter
+	// Video path is the first argument.
 	vidPath := os.Args[1]
 
-	re2, _ := regexp.Compile(`.*/([^/]+).mkv`)
-	audioOutPath := re2.ReplaceAllString(vidPath, `$1.mp3`)
+	processFile(vidPath)
 
+	// Write to log file.
+	l.WriteToFile()
+	l.Println("Action complete.")
+}
+
+func processFile(vidPath string) {
+	audioOutPath := videoPathRegex.ReplaceAllString(vidPath, `$1.mp3`)
+
+	// TODO: Do something better about selecting the subtitle track. Currently selects the first subtitle track.
 	_, err := runShellCommand("ffmpeg", "-y", "-i", vidPath, "-map", "0:s:0", tempDir+"subs.srt")
 	if err != nil {
 		return
@@ -66,12 +76,12 @@ func main() {
 	comb := readAndCombineSubtitles(tempDir + "subs.srt")
 
 	mp3ScratchPath := tempDir + "full_audio.mp3"
-	_, err = runShellCommand("ffmpeg", "-y", "-i", vidPath, "-q:a", "0", "-map", "a", mp3ScratchPath)
-
+	// TODO: Do something better about selecting the audio track. Currently selects the first audio track.
+	_, err = runShellCommand("ffmpeg", "-y", "-i", vidPath, "-q:a", "0", "-map", "0:a:0", mp3ScratchPath)
 	outFile := ""
 	for i := 0; i < len(comb); i++ {
 		cur := comb[i]
-		fname := "file-" + fmt.Sprint(i) + ".mp3"
+		fname := "shard-" + fmt.Sprint(i) + ".mp3"
 		outFile = outFile + "file '" + fname + "'" + "\n"
 		_, err = runShellCommand("ffmpeg", "-y", "-i", mp3ScratchPath, "-ss", cur.start, "-to", cur.end, "-q:a", "0", "-map", "a", tempDir+fname)
 		if err != nil {
@@ -90,17 +100,18 @@ func main() {
 	}
 
 	// Re-encode output file to repair any errors from catenation.
-	if _, err = runShellCommand("ffmpeg", "-y", "-i", tempDir+audioOutPath, "-c:v", "copy", audioOutPath); err != nil {
+	if _, err = runShellCommand("ffmpeg", "-y", "-i", tempDir+audioOutPath, "-c:v", "copy", outputDir+audioOutPath); err != nil {
 		l.Fatal(err.Error())
 	}
 
 	// Delete temp dir.
 	os.RemoveAll(tempDir)
+}
 
-	// Write to log file.
-	l.WriteToFile()
-
-	l.Println("Action complete.")
+// Interval represents a time interval over which subtitles are displayed.
+type Interval struct {
+	start string
+	end   string
 }
 
 func readAndCombineSubtitles(subPath string) []Interval {
@@ -116,8 +127,8 @@ func readAndCombineSubtitles(subPath string) []Interval {
 	for scanner.Scan() {
 		l := scanner.Text()
 		if strings.Contains(l, "-->") {
-			start := re.ReplaceAllString(l, `$1.$2`)
-			end := re.ReplaceAllString(l, `$3.$4`)
+			start := srtTimingRegex.ReplaceAllString(l, `$1.$2`)
+			end := srtTimingRegex.ReplaceAllString(l, `$3.$4`)
 			readIn = append(readIn, Interval{start: start, end: end})
 			i = i + 1
 		}
@@ -129,8 +140,8 @@ func readAndCombineSubtitles(subPath string) []Interval {
 	return combineIntervals(readIn, threshold)
 }
 
-// gapOverThreshold decides if a gap between two points is over a duration threshold.
-func gapOverThreshold(start, end string, gapThreshold time.Duration) bool {
+// isGapOverThreshold decides if a gap between two points is over a duration threshold.
+func isGapOverThreshold(start, end string, gapThreshold time.Duration) bool {
 	startTime, err := time.Parse(timestampFormat, start)
 	if err != nil {
 		l.Fatal(err.Error())
@@ -147,8 +158,8 @@ func gapOverThreshold(start, end string, gapThreshold time.Duration) bool {
 
 // combineIntervals combines possibly overlapping intervals and de-dupes and combines them when necessary.
 func combineIntervals(intervals []Interval, gapThreshold time.Duration) []Interval {
-	if len(intervals) <= 2 {
-		l.Fatal("Less than three subtitles were found in the file. Aborting.")
+	if len(intervals) == 0 {
+		l.Fatal("No subtitles were found in the file. Aborting.")
 	}
 	// Sort by start time.
 	sort.Slice(intervals, func(i, j int) bool {
@@ -159,7 +170,7 @@ func combineIntervals(intervals []Interval, gapThreshold time.Duration) []Interv
 	pending := intervals[0]
 	for i := 1; i < len(intervals); i++ {
 		cur := intervals[i]
-		if cur.start < pending.end || !gapOverThreshold(pending.end, cur.start, gapThreshold) {
+		if cur.start < pending.end || !isGapOverThreshold(pending.end, cur.start, gapThreshold) {
 			if cur.end >= pending.end {
 				pending = Interval{start: pending.start, end: cur.end}
 			}

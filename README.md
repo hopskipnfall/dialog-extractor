@@ -15,5 +15,13 @@ Currently this only supports MKV videos with SRT subtitles embeded. This should 
 ## Running tests
 
 ```shell
-$ go test
+$ go test ./...
 ```
+
+## TODO: Implement these features
+
+- Support for ASS subtitles (currently only SRT is supported)
+- Interactive audio/subtitle track selection (first track is always selected)
+- Support for extraction on all videos in a folder
+- Identifying and stripping out opening/ending songs
+- Add padding around subtitle timing in case the timing is not exact
