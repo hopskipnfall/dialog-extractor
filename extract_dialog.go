@@ -29,6 +29,8 @@ var (
 	srtTimingRegex = regexp.MustCompile(`^([^,]+),([^ ]+) --> ([^,]+),([^ ]+)$`)
 	videoPathRegex = regexp.MustCompile(`.*/([^/]+).mkv`)
 
+	progressBarTemplate = `{{string . "current_action" | green}} {{ bar . "[" "▮" (cycle . "▮" ) "_"}} {{percent .}}`
+
 	// Threshold for trimming a gap between dialog segments.
 	threshold, _ = time.ParseDuration("1.5s")
 
@@ -37,6 +39,7 @@ var (
 	l       = logger.New(&logPath)
 )
 
+// Configuration all configuration options chosen to extract dialog from a video.
 type Configuration struct {
 	Subtitles ffmpeg.Stream
 	Audio     ffmpeg.Stream
@@ -78,14 +81,7 @@ func main() {
 			cur := s[i]
 			l.Printlnf("\t%d: Title: %s (%s)", i, cur.Tags.Title, cur.Tags.Language)
 		}
-		reader := bufio.NewReader(os.Stdin)
-		fmt.Print("Choose number: ")
-		text, _ := reader.ReadString('\n')
-		text = strings.TrimSpace(text)
-		choice, err := strconv.Atoi(text)
-		if err != nil {
-			l.Fatal("illegal choice")
-		}
+		choice := requestInt("Choose number: ", 0, len(s)-1)
 		c.Audio = s[choice]
 	}
 
@@ -105,14 +101,7 @@ func main() {
 			cur := s[i]
 			l.Printlnf("\t%d: Title: %s (%s)", i, cur.Tags.Title, cur.Tags.Language)
 		}
-		reader := bufio.NewReader(os.Stdin)
-		fmt.Print("Choose number: ")
-		text, _ := reader.ReadString('\n')
-		text = strings.TrimSpace(text)
-		choice, err := strconv.Atoi(text)
-		if err != nil {
-			l.Fatal("illegal choice")
-		}
+		choice := requestInt("Choose number: ", 0, len(s)-1)
 		c.Subtitles = s[choice]
 	}
 
@@ -135,15 +124,20 @@ func processFile(vidPath string, c Configuration) {
 	comb := readAndCombineSubtitles(tempDir + "subs.srt")
 
 	// Create progress bar.
-	bar := pb.StartNew(len(comb))
+	bar := pb.ProgressBarTemplate(progressBarTemplate).Start(len(comb) + 3)
 
 	mp3ScratchPath := tempDir + "full_audio.mp3"
+
+	bar.Set("current_action", "Copying audio")
 	_, err = shell.ExecuteCommand(l, "ffmpeg", "-y", "-i", vidPath, "-q:a", "0", "-map", fmt.Sprintf("%d:%d", ffmpegInputNumber, c.Audio.Index), mp3ScratchPath)
+	bar.Increment()
+
 	outFile := ""
 	for i := 0; i < len(comb); i++ {
 		cur := comb[i]
 		fname := "shard-" + fmt.Sprint(i) + ".mp3"
 		outFile = outFile + "file '" + fname + "'" + "\n"
+		bar.Set("current_action", fmt.Sprintf("Splitting audio (%d/%d)", i+1, len(comb)))
 		_, err = shell.ExecuteCommand(l, "ffmpeg", "-y", "-i", mp3ScratchPath, "-ss", cur.start, "-to", cur.end, "-q:a", "0", "-map", "a", tempDir+fname)
 		if err != nil {
 			return
@@ -151,22 +145,25 @@ func processFile(vidPath string, c Configuration) {
 		bar.Increment()
 	}
 
-	bar.Finish()
-
 	// Write all fragment filenames to a text file.
 	if err := ioutil.WriteFile(tempDir+"output.txt", []byte(outFile), 0644); err != nil {
 		l.Fatal(err.Error())
 	}
 
 	// Combine all fragments into one file.
+	bar.Set("current_action", "Joining audio fragments")
 	if _, err = shell.ExecuteCommand(l, "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", tempDir+"output.txt", "-c", "copy", tempDir+audioOutPath); err != nil {
 		l.Fatal(err.Error())
 	}
+	bar.Increment()
 
 	// Re-encode output file to repair any errors from catenation.
+	bar.Set("current_action", "Re-encoding audio")
 	if _, err = shell.ExecuteCommand(l, "ffmpeg", "-y", "-i", tempDir+audioOutPath, "-c:v", "copy", outputDir+audioOutPath); err != nil {
 		l.Fatal(err.Error())
 	}
+	bar.Increment()
+	bar.Finish()
 
 	// Delete temp dir.
 	os.RemoveAll(tempDir)
@@ -249,4 +246,20 @@ func combineIntervals(intervals []Interval, gapThreshold time.Duration) []Interv
 		combined = append(combined, pending)
 	}
 	return combined
+}
+
+// requestInt asks the user for a bounded number using stdio.
+func requestInt(message string, min, max int) int {
+	for true {
+		fmt.Print(message)
+		reader := bufio.NewReader(os.Stdin)
+		text, _ := reader.ReadString('\n')
+		text = strings.TrimSpace(text)
+		choice, err := strconv.Atoi(text)
+		if err != nil || choice < min || choice > max {
+			l.Println("illegal choice, try again.")
+		}
+		return choice
+	}
+	panic("this is impossible")
 }
