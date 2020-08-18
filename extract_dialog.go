@@ -14,6 +14,7 @@ import (
 	"./ffmpeg"
 	"./logger"
 	"./shell"
+	"github.com/cheggaaa/pb/v3"
 )
 
 const (
@@ -123,6 +124,7 @@ func main() {
 }
 
 func processFile(vidPath string, c Configuration) {
+
 	audioOutPath := videoPathRegex.ReplaceAllString(vidPath, `$1.mp3`)
 
 	_, err := shell.ExecuteCommand(l, "ffmpeg", "-y", "-i", vidPath, "-map", fmt.Sprintf("%d:%d", ffmpegInputNumber, c.Subtitles.Index), tempDir+"subs.srt")
@@ -131,6 +133,9 @@ func processFile(vidPath string, c Configuration) {
 	}
 
 	comb := readAndCombineSubtitles(tempDir + "subs.srt")
+
+	// Create progress bar.
+	bar := pb.StartNew(len(comb))
 
 	mp3ScratchPath := tempDir + "full_audio.mp3"
 	_, err = shell.ExecuteCommand(l, "ffmpeg", "-y", "-i", vidPath, "-q:a", "0", "-map", fmt.Sprintf("%d:%d", ffmpegInputNumber, c.Audio.Index), mp3ScratchPath)
@@ -143,7 +148,10 @@ func processFile(vidPath string, c Configuration) {
 		if err != nil {
 			return
 		}
+		bar.Increment()
 	}
+
+	bar.Finish()
 
 	// Write all fragment filenames to a text file.
 	if err := ioutil.WriteFile(tempDir+"output.txt", []byte(outFile), 0644); err != nil {
