@@ -321,7 +321,7 @@ func toInterval(chapter ffmpeg.Chapter) Interval {
 // requestInt asks the user for a bounded number using stdio.
 func requestInt(message string, min, max int) int {
 	for true {
-		fmt.Print(message)
+		l.Print(message)
 		reader := bufio.NewReader(os.Stdin)
 		text, _ := reader.ReadString('\n')
 		text = strings.TrimSpace(text)
@@ -338,12 +338,15 @@ func requestInt(message string, min, max int) int {
 // requestInt asks the user for a bounded number using stdio.
 func requestMultipleInts(message string, min, max int) []int {
 	for true {
-		var out []int
-
-		valid := true
-		fmt.Print(message)
+		l.Print(message)
 		reader := bufio.NewReader(os.Stdin)
 		text, _ := reader.ReadString('\n')
+		if text == "" {
+			return []int{}
+		}
+
+		var out []int
+		valid := true
 		choices := strings.Split(text, ",")
 		for i := 0; i < len(choices); i++ {
 			choice, err := strconv.Atoi(strings.TrimSpace(choices[i]))
