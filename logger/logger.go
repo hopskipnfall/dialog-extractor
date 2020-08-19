@@ -22,28 +22,24 @@ func New(outputPath *string) *Logger {
 }
 
 // Print fmt.Print
-func (l *Logger) Print(message string) {
-	l.logOutput = l.logOutput + message
-	fmt.Print(message)
+func (l *Logger) Print(v ...interface{}) {
+	m := fmt.Sprint(v...)
+	l.logOutput = l.logOutput + m
+	fmt.Print(m)
 }
 
 // Fatal fmt.Print
-func (l *Logger) Fatal(message string) {
-	l.logOutput = l.logOutput + message
+func (l *Logger) Fatal(v ...interface{}) {
+	m := fmt.Sprint(v...)
+	l.logOutput = l.logOutput + m
 	l.WriteToFile()
-	log.Fatal(message)
-}
-
-// NewLine fmt.Println("")
-func (l *Logger) NewLine() {
-	l.logOutput = l.logOutput + "\n"
-	fmt.Println()
+	log.Fatal(m)
 }
 
 // Println fmt.Println
-func (l *Logger) Println(message string) {
-	l.Print(message)
-	l.NewLine()
+func (l *Logger) Println(v ...interface{}) {
+	m := fmt.Sprint(v...) + "\n"
+	l.Print(m)
 }
 
 // Printlnf Formatted Println

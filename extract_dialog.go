@@ -21,6 +21,7 @@ const (
 	tempDir   = "./.tmp/"
 	outputDir = "./out/"
 
+	// Format for SRT timestamps.
 	timestampFormat   = "15:04:05.000"
 	ffmpegInputNumber = 0
 )
@@ -41,8 +42,9 @@ var (
 
 // Configuration all configuration options chosen to extract dialog from a video.
 type Configuration struct {
-	Subtitles ffmpeg.Stream
-	Audio     ffmpeg.Stream
+	Subtitles       ffmpeg.Stream
+	Audio           ffmpeg.Stream
+	SkippedChapters []ffmpeg.Chapter
 }
 
 func main() {
@@ -89,7 +91,7 @@ func main() {
 	if err != nil {
 		l.Fatal(err.Error())
 	}
-
+	l.Println()
 	if len(s) == 0 {
 		l.Fatal("no subtitle tracks found")
 	} else if len(s) == 1 {
@@ -103,6 +105,28 @@ func main() {
 		}
 		choice := requestInt("Choose option: ", 0, len(s)-1)
 		c.Subtitles = s[choice]
+	}
+
+	l.Println()
+	info, err := v.InfoStruct()
+	if err != nil {
+		l.Fatal(err.Error())
+	}
+	if len(info.Chapters) == 0 {
+		l.Print("no chapters found, skipping step")
+	} else {
+		l.Println("This video has labeled chapters:")
+		for i := 0; i < len(info.Chapters); i++ {
+			cur := info.Chapters[i]
+			ivl := toInterval(cur)
+			l.Printlnf("\tOption %d: %s\t(%s - %s)", i, cur.Tags.Title, ivl.start, ivl.end)
+		}
+		choices := requestMultipleInts("Choose chapters that should be ignored (comma-separated): ", 0, len(info.Chapters)-1)
+		var chaps []ffmpeg.Chapter
+		for i := 0; i < len(choices); i++ {
+			chaps = append(chaps, info.Chapters[choices[i]])
+		}
+		c.SkippedChapters = chaps
 	}
 
 	processFile(vidPath, *c)
@@ -121,6 +145,7 @@ func processFile(vidPath string, c Configuration) {
 	}
 
 	comb := readAndCombineSubtitles(tempDir + "subs.srt")
+	comb = subtractChapters(comb, c.SkippedChapters)
 
 	// Create progress bar.
 	bar := pb.ProgressBarTemplate(progressBarTemplate).Start(len(comb) + 3)
@@ -168,6 +193,39 @@ func processFile(vidPath string, c Configuration) {
 	os.RemoveAll(tempDir)
 
 	l.Printlnf("Action completed. Created file %s", tempDir+audioOutPath)
+}
+
+func subtractChapters(intervals []Interval, chapters []ffmpeg.Chapter) []Interval {
+	if len(chapters) == 0 {
+		return intervals
+	}
+
+	wip := intervals
+
+	for j := 0; j < len(chapters); j++ {
+		var rev []Interval
+		chap := toInterval(chapters[j])
+		for i := 0; i < len(wip); i++ {
+			cur := wip[i]
+			if cur.start > chap.start && cur.start < chap.end {
+				cur = Interval{
+					start: chap.end,
+					end:   cur.end,
+				}
+			}
+			if cur.end > chap.start && cur.end < chap.end {
+				cur = Interval{
+					start: cur.start,
+					end:   chap.start,
+				}
+			}
+			if cur.start < cur.end {
+				rev = append(rev, cur)
+			}
+		}
+		wip = rev
+	}
+	return wip
 }
 
 // Interval represents a time interval over which subtitles are displayed.
@@ -249,6 +307,17 @@ func combineIntervals(intervals []Interval, gapThreshold time.Duration) []Interv
 	return combined
 }
 
+func toInterval(chapter ffmpeg.Chapter) Interval {
+	start, _ := time.ParseDuration(chapter.StartTime + "s")
+	end, _ := time.ParseDuration(chapter.EndTime + "s")
+
+	zero, _ := time.Parse("00:00:00,000", timestampFormat)
+	return Interval{
+		start: zero.Add(start).Format(timestampFormat),
+		end:   zero.Add(end).Format(timestampFormat),
+	}
+}
+
 // requestInt asks the user for a bounded number using stdio.
 func requestInt(message string, min, max int) int {
 	for true {
@@ -261,6 +330,32 @@ func requestInt(message string, min, max int) int {
 			l.Println("illegal choice, try again.")
 		} else {
 			return choice
+		}
+	}
+	panic("this is impossible")
+}
+
+// requestInt asks the user for a bounded number using stdio.
+func requestMultipleInts(message string, min, max int) []int {
+	for true {
+		var out []int
+
+		valid := true
+		fmt.Print(message)
+		reader := bufio.NewReader(os.Stdin)
+		text, _ := reader.ReadString('\n')
+		choices := strings.Split(text, ",")
+		for i := 0; i < len(choices); i++ {
+			choice, err := strconv.Atoi(strings.TrimSpace(choices[i]))
+			if err != nil || choice < min || choice > max {
+				l.Println("illegal choice, try again.")
+				valid = false
+			} else {
+				out = append(out, choice)
+			}
+		}
+		if valid {
+			return out
 		}
 	}
 	panic("this is impossible")

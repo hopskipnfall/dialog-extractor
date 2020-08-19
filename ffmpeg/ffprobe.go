@@ -107,7 +107,7 @@ func (v *Video) InfoStruct() (*VideoInfo, error) {
 		return nil, err
 	}
 	i := VideoInfo{}
-	err = json.Unmarshal(res, &v)
+	err = json.Unmarshal(res, &i)
 	return &i, err
 }
 
