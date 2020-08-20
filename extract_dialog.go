@@ -13,17 +13,13 @@ import (
 
 	"./ffmpeg"
 	"./logger"
-	"./shell"
 	"github.com/cheggaaa/pb/v3"
 )
 
 const (
-	tempDir   = "./.tmp/"
-	outputDir = "./out/"
 
 	// Format for SRT timestamps.
-	timestampFormat   = "15:04:05.000"
-	ffmpegInputNumber = 0
+	timestampFormat = "15:04:05.000"
 )
 
 var (
@@ -38,23 +34,11 @@ var (
 	// Logging.
 	logPath = "./log.txt"
 	l       = logger.New(&logPath)
+
+	supportedFormats = []string{"mkv"}
 )
 
-// Configuration all configuration options chosen to extract dialog from a video.
-type Configuration struct {
-	Subtitles       ffmpeg.Stream
-	Audio           ffmpeg.Stream
-	SkippedChapters []ffmpeg.Chapter
-}
-
 func main() {
-	// Create directories if needed.
-	if _, err := os.Stat(tempDir); os.IsNotExist(err) {
-		os.Mkdir(tempDir, 0755)
-	}
-	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
-		os.Mkdir(outputDir, 0755)
-	}
 
 	// Video path is the first argument.
 	vidPath := os.Args[1]
@@ -65,7 +49,18 @@ func main() {
 		l.Fatal(err.Error())
 	}
 
-	c := &Configuration{}
+	c := &ffmpeg.Configuration{
+		TempDir:   "./.tmp/",
+		OutputDir: "./out/",
+	}
+
+	// Create directories if needed.
+	if _, err := os.Stat(c.TempDir); os.IsNotExist(err) {
+		os.Mkdir(c.TempDir, 0755)
+	}
+	if _, err := os.Stat(c.OutputDir); os.IsNotExist(err) {
+		os.Mkdir(c.OutputDir, 0755)
+	}
 
 	s, err := v.GetAudioStreams()
 	if err != nil {
@@ -119,7 +114,7 @@ func main() {
 		for i := 0; i < len(info.Chapters); i++ {
 			cur := info.Chapters[i]
 			ivl := toInterval(cur)
-			l.Printlnf("\tOption %d: %s\t(%s - %s)", i, cur.Tags.Title, ivl.start, ivl.end)
+			l.Printlnf("\tOption %d: %s\t(%s - %s)", i, cur.Tags.Title, ivl.Start, ivl.End)
 		}
 		choices := requestMultipleInts("Choose chapters that should be ignored (comma-separated): ", 0, len(info.Chapters)-1)
 		var chaps []ffmpeg.Chapter
@@ -129,31 +124,26 @@ func main() {
 		c.SkippedChapters = chaps
 	}
 
-	processFile(vidPath, *c)
+	processFile(v, *c)
 
 	// Write to log file.
 	l.WriteToFile()
 }
 
-func processFile(vidPath string, c Configuration) {
-
-	audioOutPath := videoPathRegex.ReplaceAllString(vidPath, `$1.mp3`)
-
-	_, err := shell.ExecuteCommand(l, "ffmpeg", "-y", "-i", vidPath, "-map", fmt.Sprintf("%d:%d", ffmpegInputNumber, c.Subtitles.Index), tempDir+"subs.srt")
+func processFile(v *ffmpeg.Video, c ffmpeg.Configuration) {
+	_, err := v.ExtractSubtitles(c)
 	if err != nil {
 		return
 	}
 
-	comb := readAndCombineSubtitles(tempDir + "subs.srt")
+	comb := readAndCombineSubtitles(c.TempDir + "subs.srt")
 	comb = subtractChapters(comb, c.SkippedChapters)
 
 	// Create progress bar.
 	bar := pb.ProgressBarTemplate(progressBarTemplate).Start(len(comb) + 3)
 
-	mp3ScratchPath := tempDir + "full_audio.mp3"
-
 	bar.Set("current_action", "Copying audio")
-	_, err = shell.ExecuteCommand(l, "ffmpeg", "-y", "-i", vidPath, "-q:a", "0", "-map", fmt.Sprintf("%d:%d", ffmpegInputNumber, c.Audio.Index), mp3ScratchPath)
+	_, err = v.ExtractAudio(c)
 	bar.Increment()
 
 	outFile := ""
@@ -162,7 +152,7 @@ func processFile(vidPath string, c Configuration) {
 		fname := "shard-" + fmt.Sprint(i) + ".mp3"
 		outFile = outFile + "file '" + fname + "'" + "\n"
 		bar.Set("current_action", fmt.Sprintf("Splitting audio (%d/%d)", i+1, len(comb)))
-		_, err = shell.ExecuteCommand(l, "ffmpeg", "-y", "-i", mp3ScratchPath, "-ss", cur.start, "-to", cur.end, "-q:a", "0", "-map", "a", tempDir+fname)
+		_, err = v.ExtractAudioFromInterval(c, cur, c.TempDir+fname)
 		if err != nil {
 			return
 		}
@@ -170,32 +160,33 @@ func processFile(vidPath string, c Configuration) {
 	}
 
 	// Write all fragment filenames to a text file.
-	if err := ioutil.WriteFile(tempDir+"output.txt", []byte(outFile), 0644); err != nil {
+	if err := ioutil.WriteFile(c.TempDir+"output.txt", []byte(outFile), 0644); err != nil {
 		l.Fatal(err.Error())
 	}
 
 	// Combine all fragments into one file.
 	bar.Set("current_action", "Joining audio fragments")
-	if _, err = shell.ExecuteCommand(l, "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", tempDir+"output.txt", "-c", "copy", tempDir+audioOutPath); err != nil {
+	audioOutPath := videoPathRegex.ReplaceAllString(v.Path, `$1.mp3`)
+	if _, err = v.CatenateAudioFiles(c, c.TempDir+audioOutPath); err != nil {
 		l.Fatal(err.Error())
 	}
 	bar.Increment()
 
 	// Re-encode output file to repair any errors from catenation.
 	bar.Set("current_action", "Re-encoding audio")
-	if _, err = shell.ExecuteCommand(l, "ffmpeg", "-y", "-i", tempDir+audioOutPath, "-c:v", "copy", outputDir+audioOutPath); err != nil {
+	if _, err = v.ReEncodeAudio(c, c.TempDir+audioOutPath, c.OutputDir+audioOutPath); err != nil {
 		l.Fatal(err.Error())
 	}
 	bar.Increment()
 	bar.Finish()
 
 	// Delete temp dir.
-	os.RemoveAll(tempDir)
+	os.RemoveAll(c.TempDir)
 
-	l.Printlnf("Action completed. Created file %s", tempDir+audioOutPath)
+	l.Printlnf("Action completed. Created file %s", c.TempDir+audioOutPath)
 }
 
-func subtractChapters(intervals []Interval, chapters []ffmpeg.Chapter) []Interval {
+func subtractChapters(intervals []ffmpeg.Interval, chapters []ffmpeg.Chapter) []ffmpeg.Interval {
 	if len(chapters) == 0 {
 		return intervals
 	}
@@ -203,23 +194,23 @@ func subtractChapters(intervals []Interval, chapters []ffmpeg.Chapter) []Interva
 	wip := intervals
 
 	for j := 0; j < len(chapters); j++ {
-		var rev []Interval
+		var rev []ffmpeg.Interval
 		chap := toInterval(chapters[j])
 		for i := 0; i < len(wip); i++ {
 			cur := wip[i]
-			if cur.start > chap.start && cur.start < chap.end {
-				cur = Interval{
-					start: chap.end,
-					end:   cur.end,
+			if cur.Start > chap.Start && cur.Start < chap.End {
+				cur = ffmpeg.Interval{
+					Start: chap.End,
+					End:   cur.End,
 				}
 			}
-			if cur.end > chap.start && cur.end < chap.end {
-				cur = Interval{
-					start: cur.start,
-					end:   chap.start,
+			if cur.End > chap.Start && cur.End < chap.End {
+				cur = ffmpeg.Interval{
+					Start: cur.Start,
+					End:   chap.Start,
 				}
 			}
-			if cur.start < cur.end {
+			if cur.Start < cur.End {
 				rev = append(rev, cur)
 			}
 		}
@@ -228,20 +219,14 @@ func subtractChapters(intervals []Interval, chapters []ffmpeg.Chapter) []Interva
 	return wip
 }
 
-// Interval represents a time interval over which subtitles are displayed.
-type Interval struct {
-	start string
-	end   string
-}
-
-func readAndCombineSubtitles(subPath string) []Interval {
+func readAndCombineSubtitles(subPath string) []ffmpeg.Interval {
 	file, err := os.Open(subPath)
 	if err != nil {
 		l.Fatal(err.Error())
 	}
 	defer file.Close()
 
-	var readIn []Interval
+	var readIn []ffmpeg.Interval
 	scanner := bufio.NewScanner(file)
 	i := 0
 	for scanner.Scan() {
@@ -249,7 +234,7 @@ func readAndCombineSubtitles(subPath string) []Interval {
 		if strings.Contains(l, "-->") {
 			start := srtTimingRegex.ReplaceAllString(l, `$1.$2`)
 			end := srtTimingRegex.ReplaceAllString(l, `$3.$4`)
-			readIn = append(readIn, Interval{start: start, end: end})
+			readIn = append(readIn, ffmpeg.Interval{Start: start, End: end})
 			i = i + 1
 		}
 	}
@@ -277,44 +262,44 @@ func isGapOverThreshold(start, end string, gapThreshold time.Duration) bool {
 }
 
 // combineIntervals combines possibly overlapping intervals and de-dupes and combines them when necessary.
-func combineIntervals(intervals []Interval, gapThreshold time.Duration) []Interval {
+func combineIntervals(intervals []ffmpeg.Interval, gapThreshold time.Duration) []ffmpeg.Interval {
 	if len(intervals) == 0 {
 		l.Fatal("No subtitles were found in the file. Aborting.")
 	}
 	// Sort by start time.
 	sort.Slice(intervals, func(i, j int) bool {
-		return intervals[i].start < intervals[j].start
+		return intervals[i].Start < intervals[j].Start
 	})
 
-	var combined []Interval
+	var combined []ffmpeg.Interval
 	pending := intervals[0]
 	for i := 1; i < len(intervals); i++ {
 		cur := intervals[i]
-		if cur.start < pending.end || !isGapOverThreshold(pending.end, cur.start, gapThreshold) {
-			if cur.end >= pending.end {
-				pending = Interval{start: pending.start, end: cur.end}
+		if cur.Start < pending.End || !isGapOverThreshold(pending.End, cur.Start, gapThreshold) {
+			if cur.End >= pending.End {
+				pending = ffmpeg.Interval{Start: pending.Start, End: cur.End}
 			}
 		} else {
-			if pending.start != pending.end {
+			if pending.Start != pending.End {
 				combined = append(combined, pending)
 			}
 			pending = cur
 		}
 	}
-	if pending.start != pending.end {
+	if pending.Start != pending.End {
 		combined = append(combined, pending)
 	}
 	return combined
 }
 
-func toInterval(chapter ffmpeg.Chapter) Interval {
+func toInterval(chapter ffmpeg.Chapter) ffmpeg.Interval {
 	start, _ := time.ParseDuration(chapter.StartTime + "s")
 	end, _ := time.ParseDuration(chapter.EndTime + "s")
 
 	zero, _ := time.Parse("00:00:00,000", timestampFormat)
-	return Interval{
-		start: zero.Add(start).Format(timestampFormat),
-		end:   zero.Add(end).Format(timestampFormat),
+	return ffmpeg.Interval{
+		Start: zero.Add(start).Format(timestampFormat),
+		End:   zero.Add(end).Format(timestampFormat),
 	}
 }
 
@@ -362,4 +347,13 @@ func requestMultipleInts(message string, min, max int) []int {
 		}
 	}
 	panic("this is impossible")
+}
+
+func IsDirectory(path string) (bool, error) {
+	fileInfo, err := os.Stat(path)
+	l.Printlnf("Hey you %s", fileInfo.Name())
+	if err != nil {
+		return false, err
+	}
+	return fileInfo.IsDir(), err
 }

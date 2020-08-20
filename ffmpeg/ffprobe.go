@@ -2,10 +2,24 @@ package ffmpeg
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"../logger"
 	"../shell"
 )
+
+const (
+	ffmpegInputNumber = 0
+)
+
+// Configuration all configuration options chosen to extract dialog from a video.
+type Configuration struct {
+	Subtitles       Stream
+	Audio           Stream
+	SkippedChapters []Chapter
+	TempDir         string
+	OutputDir       string
+}
 
 type Disposition struct {
 	Default         int `json:"default,omitempty"`
@@ -73,15 +87,16 @@ type Chapter struct {
 }
 
 type Video struct {
-	l    *logger.Logger
-	path string
+	l *logger.Logger
+
+	Path string
 }
 
 // New Creates a new logger.
 func NewVideo(logger *logger.Logger, path string) *Video {
 	v := &Video{
 		l:    logger,
-		path: path,
+		Path: path,
 	}
 	return v
 }
@@ -93,7 +108,7 @@ type VideoInfo struct {
 
 // FullFileInfo requests info from ffprobe in json form.
 func (v *Video) LogFullFileInfo() error {
-	res, err := shell.ExecuteCommand(v.l, "ffprobe", v.path)
+	res, err := shell.ExecuteCommand(v.l, "ffprobe", v.Path)
 	if err != nil {
 		return err
 	}
@@ -102,7 +117,7 @@ func (v *Video) LogFullFileInfo() error {
 }
 
 func (v *Video) InfoStruct() (*VideoInfo, error) {
-	res, err := shell.ExecuteCommand(v.l, "ffprobe", v.path, "-show_streams", "-show_chapters", "-v", "quiet", "-print_format", "json")
+	res, err := shell.ExecuteCommand(v.l, "ffprobe", v.Path, "-show_streams", "-show_chapters", "-v", "quiet", "-print_format", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +128,7 @@ func (v *Video) InfoStruct() (*VideoInfo, error) {
 
 func (v *Video) GetAudioStreams() ([]Stream, error) {
 	// TODO: Use InfoStruct instead.
-	res, err := shell.ExecuteCommand(v.l, "ffprobe", v.path, "-select_streams", "a", "-show_streams", "-v", "quiet", "-print_format", "json")
+	res, err := shell.ExecuteCommand(v.l, "ffprobe", v.Path, "-select_streams", "a", "-show_streams", "-v", "quiet", "-print_format", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -124,11 +139,46 @@ func (v *Video) GetAudioStreams() ([]Stream, error) {
 
 func (v *Video) GetSubtitleStreams() ([]Stream, error) {
 	// TODO: Use InfoStruct instead.
-	res, err := shell.ExecuteCommand(v.l, "ffprobe", v.path, "-select_streams", "s", "-show_streams", "-v", "quiet", "-print_format", "json")
+	res, err := shell.ExecuteCommand(v.l, "ffprobe", v.Path, "-select_streams", "s", "-show_streams", "-v", "quiet", "-print_format", "json")
 	if err != nil {
 		return nil, err
 	}
 	i := VideoInfo{}
 	err = json.Unmarshal(res, &i)
 	return i.Streams, err
+}
+
+func (v *Video) ExtractSubtitles(c Configuration) ([]byte, error) {
+	// TODO: Use InfoStruct instead.
+	return shell.ExecuteCommand(v.l, "ffmpeg", "-y", "-i", v.Path, "-map", fmt.Sprintf("%d:%d", ffmpegInputNumber, c.Subtitles.Index), c.TempDir+"subs.srt")
+}
+
+func (v *Video) ExtractAudio(c Configuration) ([]byte, error) {
+	// TODO: Use InfoStruct instead.
+	return shell.ExecuteCommand(v.l, "ffmpeg", "-y", "-i", v.Path, "-q:a", "0", "-map", fmt.Sprintf("%d:%d", ffmpegInputNumber, c.Audio.Index), v.mp3ScratchPath(c))
+}
+
+func (v *Video) ExtractAudioFromInterval(c Configuration, i Interval, filename string) ([]byte, error) {
+	// TODO: Use InfoStruct instead.
+	return shell.ExecuteCommand(v.l, "ffmpeg", "-y", "-i", v.mp3ScratchPath(c), "-ss", i.Start, "-to", i.End, "-q:a", "0", "-map", "a", filename)
+}
+
+func (v *Video) CatenateAudioFiles(c Configuration, filename string) ([]byte, error) {
+	// TODO: Use InfoStruct instead.
+	return shell.ExecuteCommand(v.l, "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", c.TempDir+"output.txt", "-c", "copy", filename)
+}
+
+func (v *Video) ReEncodeAudio(c Configuration, originalPath, outputPath string) ([]byte, error) {
+	// TODO: Use InfoStruct instead.
+	return shell.ExecuteCommand(v.l, "ffmpeg", "-y", "-i", originalPath, "-c:v", "copy", outputPath)
+}
+
+func (v *Video) mp3ScratchPath(c Configuration) string {
+	return c.TempDir + "full_audio.mp3"
+}
+
+// Interval represents a time interval over which subtitles are displayed.
+type Interval struct {
+	Start string
+	End   string
 }
