@@ -42,7 +42,6 @@ var (
 )
 
 func main() {
-	// Video path is the first argument.
 	inputPath := os.Args[1]
 
 	isDir, err := isDirectory(inputPath)
@@ -66,16 +65,170 @@ func processFolder(folderPath string) {
 		log.Fatal(err)
 	}
 
-	var paths []string
+	// var paths []string
+	// for _, f := range files {
+	// 	cur := filepath.Join(folderPath, f.Name())
+	// 	for _, ext := range supportedFormats {
+	// 		if strings.HasSuffix(cur, "."+ext) {
+	// 			paths = append(paths, cur)
+	// 		}
+	// 	}
+	// }
+	var videos []*ffmpeg.Video
 	for _, f := range files {
 		cur := filepath.Join(folderPath, f.Name())
 		for _, ext := range supportedFormats {
 			if strings.HasSuffix(cur, "."+ext) {
-				paths = append(paths, cur)
+				videos = append(videos, ffmpeg.NewVideo(l, cur))
 			}
 		}
 	}
 
+	sum := buildChapterSummary(videos)
+	selectChapterSummary(sum)
+}
+
+func buildChapterSummary(videos []*ffmpeg.Video) []chapterSummary {
+	m := make(map[string]int)
+	sTimes := make(map[string][]string)
+	eTimes := make(map[string][]string)
+
+	for _, v := range videos {
+		s, err := v.InfoStruct()
+		if err != nil {
+			l.Fatal(err)
+		}
+
+		for _, c := range s.Chapters {
+			ivl := toInterval(c)
+			m[ivl.Title] = m[ivl.Title] + 1
+			sTimes[ivl.Title] = append(sTimes[ivl.Title], ivl.Start)
+			eTimes[ivl.Title] = append(eTimes[ivl.Title], ivl.End)
+		}
+	}
+
+	var out []chapterSummary
+	for k := range m {
+		starts := getMedian(sTimes[k])
+		ends := getMedian(eTimes[k])
+		out = append(out, chapterSummary{
+			Title:       k,
+			Count:       m[k],
+			MedianStart: starts,
+			MedianEnd:   ends,
+		})
+	}
+	// Sort by median start time.
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].MedianStart < out[j].MedianStart
+	})
+	return out
+}
+
+func getMedian(s []string) string {
+	sort.Slice(s, func(i, j int) bool {
+		return s[i] < s[j]
+	})
+	return s[len(s)/2]
+}
+
+type chapterSummary struct {
+	Title       string
+	Count       int
+	MedianStart string
+	MedianEnd   string
+}
+
+func selectChapterSummary(cs []chapterSummary) []chapterSummary {
+	type wrapped struct {
+		Checkbox    string
+		Description string
+		Summary     chapterSummary
+	}
+	w := []wrapped{{Checkbox: "✅ DONE", Description: ""}}
+
+	checked := "✔️"
+	unchecked := " "
+	for _, st := range cs {
+		w = append(w, wrapped{
+			Summary:     st,
+			Checkbox:    unchecked,
+			Description: fmt.Sprintf("(%s - %s) found in %d videos", st.MedianStart, st.MedianEnd, st.Count),
+		})
+	}
+	templates := &promptui.SelectTemplates{
+		Label: `{{ . }}`,
+		Active: `🌶 {{.Checkbox | green}} {{ .Summary.Title | cyan }}	{{ .Description | faint }}`,
+		Inactive: `  {{.Checkbox | green}} {{ .Summary.Title | cyan }}	{{ .Description | faint }}`,
+		Details: `
+--------- Audio Track ----------
+{{ "Title:" | faint }}	{{ .Summary.Title }}
+{{ "Median time:" | faint }}	{{ .Summary.MedianStart | faint }} - {{ .Summary.MedianEnd | faint }}
+{{ "Present in videos:" | faint }}	{{ .Summary.Count }}`,
+	}
+	pos := 1
+
+	for true {
+		prompt := promptui.Select{
+			Label:        "Select chapter titles to ignore in all videos:",
+			Items:        w,
+			Templates:    templates,
+			Size:         10,
+			HideSelected: true,
+			CursorPos:    pos,
+		}
+
+		choice, _, err := prompt.Run()
+		if err != nil {
+			l.Fatal(err)
+		}
+
+		if choice == 0 {
+			break
+		} else {
+			pos = choice
+			if w[choice].Checkbox == checked {
+				w[choice].Checkbox = unchecked
+			} else {
+				w[choice].Checkbox = checked
+			}
+		}
+	}
+
+	var out []chapterSummary
+	for _, i := range w {
+		if i.Checkbox == checked {
+			out = append(out, i.Summary)
+		}
+	}
+	return out
+}
+
+func selectAudioTrack(s []ffmpeg.Stream, promptMessage, selectedLabel string) ffmpeg.Stream {
+	templates := &promptui.SelectTemplates{
+		Label:    "{{ . }}",
+		Active:   "\U0001F336 {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
+		Inactive: "  {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
+		Selected: selectedLabel + " {{ .Tags.Title | red | cyan }}",
+		Details: `
+--------- Audio Track ----------
+{{ "Name:" | faint }}	{{ .Tags.Title }}
+{{ "Language:" | faint }}	{{ .Tags.Language }}
+{{ "Codec:" | faint }}	{{ .CodecLongName }}`,
+	}
+
+	prompt := promptui.Select{
+		Label:     promptMessage,
+		Items:     s,
+		Templates: templates,
+		Size:      4,
+	}
+
+	choice, _, err := prompt.Run()
+	if err != nil {
+		l.Fatal(err)
+	}
+	return s[choice]
 }
 
 func processOneFile(vidPath string) {
@@ -109,30 +262,7 @@ func processOneFile(vidPath string) {
 		l.Printlnf("Found one audio track: %s (%s)", s[0].Tags.Title, s[0].Tags.Language)
 		c.Audio = s[0]
 	} else {
-		templates := &promptui.SelectTemplates{
-			Label:    "{{ . }}",
-			Active:   "\U0001F336 {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
-			Inactive: "  {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
-			Selected: "Selected audio track: {{ .Tags.Title | red | cyan }}",
-			Details: `
---------- Audio Track ----------
-{{ "Name:" | faint }}	{{ .Tags.Title }}
-{{ "Language:" | faint }}	{{ .Tags.Language }}
-{{ "Codec:" | faint }}	{{ .CodecLongName }}`,
-		}
-
-		prompt := promptui.Select{
-			Label:     "Select the audio track to use:",
-			Items:     s,
-			Templates: templates,
-			Size:      4,
-		}
-
-		choice, _, err := prompt.Run()
-		if err != nil {
-			l.Fatal(err)
-		}
-		c.Audio = s[choice]
+		c.Audio = selectAudioTrack(s, "Select the audio track to use:", "Selected audio track:")
 	}
 
 	s, err = v.GetSubtitleStreams()
