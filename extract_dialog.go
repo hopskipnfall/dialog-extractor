@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -14,6 +16,7 @@ import (
 	"./ffmpeg"
 	"./logger"
 	"github.com/cheggaaa/pb/v3"
+	"github.com/manifoldco/promptui"
 )
 
 const (
@@ -39,10 +42,43 @@ var (
 )
 
 func main() {
-
 	// Video path is the first argument.
-	vidPath := os.Args[1]
+	inputPath := os.Args[1]
 
+	isDir, err := isDirectory(inputPath)
+	if err != nil {
+		l.Fatal(err)
+	}
+
+	if isDir {
+		processFolder(inputPath)
+	} else {
+		processOneFile(inputPath)
+	}
+
+	// Write to log file.
+	l.WriteToFile()
+}
+
+func processFolder(folderPath string) {
+	files, err := ioutil.ReadDir(folderPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var paths []string
+	for _, f := range files {
+		cur := filepath.Join(folderPath, f.Name())
+		for _, ext := range supportedFormats {
+			if strings.HasSuffix(cur, "."+ext) {
+				paths = append(paths, cur)
+			}
+		}
+	}
+
+}
+
+func processOneFile(vidPath string) {
 	v := ffmpeg.NewVideo(l, vidPath)
 	err := v.LogFullFileInfo()
 	if err != nil {
@@ -73,12 +109,29 @@ func main() {
 		l.Printlnf("Found one audio track: %s (%s)", s[0].Tags.Title, s[0].Tags.Language)
 		c.Audio = s[0]
 	} else {
-		l.Println("Found multiple audio tracks:")
-		for i := 0; i < len(s); i++ {
-			cur := s[i]
-			l.Printlnf("\tOption %d: %s (%s)", i, cur.Tags.Title, cur.Tags.Language)
+		templates := &promptui.SelectTemplates{
+			Label:    "{{ . }}",
+			Active:   "\U0001F336 {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
+			Inactive: "  {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
+			Selected: "Selected audio track: {{ .Tags.Title | red | cyan }}",
+			Details: `
+--------- Audio Track ----------
+{{ "Name:" | faint }}	{{ .Tags.Title }}
+{{ "Language:" | faint }}	{{ .Tags.Language }}
+{{ "Codec:" | faint }}	{{ .CodecLongName }}`,
 		}
-		choice := requestInt("Choose option: ", 0, len(s)-1)
+
+		prompt := promptui.Select{
+			Label:     "Select the audio track to use:",
+			Items:     s,
+			Templates: templates,
+			Size:      4,
+		}
+
+		choice, _, err := prompt.Run()
+		if err != nil {
+			l.Fatal(err)
+		}
 		c.Audio = s[choice]
 	}
 
@@ -93,12 +146,28 @@ func main() {
 		l.Printlnf("Found one subtitle track: %s (%s)", s[0].Tags.Title, s[0].Tags.Language)
 		c.Subtitles = s[0]
 	} else {
-		l.Println("Found multiple subtitle tracks:")
-		for i := 0; i < len(s); i++ {
-			cur := s[i]
-			l.Printlnf("\tOption %d: %s (%s)", i, cur.Tags.Title, cur.Tags.Language)
+		templates := &promptui.SelectTemplates{
+			Label:    "{{ . }}",
+			Active:   "\U0001F336 {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
+			Inactive: "  {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
+			Selected: "Selected subtitle track: {{ .Tags.Title | red | cyan }}",
+			Details: `
+--------- Subtitle Track ----------
+{{ "Name:" | faint }}	{{ .Tags.Title }}
+{{ "Codec:" | faint }}	{{ .CodecLongName }}`,
 		}
-		choice := requestInt("Choose option: ", 0, len(s)-1)
+
+		prompt := promptui.Select{
+			Label:     "Select the subtitle track to use:",
+			Items:     s,
+			Templates: templates,
+			Size:      4,
+		}
+
+		choice, _, err := prompt.Run()
+		if err != nil {
+			l.Fatal(err)
+		}
 		c.Subtitles = s[choice]
 	}
 
@@ -124,13 +193,60 @@ func main() {
 		c.SkippedChapters = chaps
 	}
 
-	processFile(v, *c)
-
-	// Write to log file.
-	l.WriteToFile()
+	extractDialog(v, *c)
 }
 
-func processFile(v *ffmpeg.Video, c ffmpeg.Configuration) {
+// func selectMultipleChapters(options []ffmpeg.Chapter, message string) []ffmpeg.Chapter {
+// 	var chosen []ffmpeg.Chapter
+
+// 	for true {
+// 		var intervals []ffmpeg.Interval
+// 		for _, c := range options {
+// 			intervals = append(intervals, toInterval(c))
+// 		}
+
+// 		templates := &promptui.SelectTemplates{
+// 			Label:    "{{ . }}",
+// 			Active:   "\U0001F336 {{ .Title | cyan }} ({{ .Start | red }} - {{ .End | red }})",
+// 			Inactive: "  {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
+// 			Selected: "Removed chapter: {{ .Tags.Title | red | cyan }}",
+// 			Details: `
+// 	--------- Subtitle Track ----------
+// 	{{ "Name:" | faint }}	{{ .Tags.Title }}
+// 	{{ "Codec:" | faint }}	{{ .CodecLongName }}`,
+// 		}
+
+// 		searcher := func(input string, index int) bool {
+// 			pepper := intervals[index]
+// 			name := strings.Replace(strings.ToLower(pepper.Title), " ", "", -1)
+// 			input = strings.Replace(strings.ToLower(input), " ", "", -1)
+
+// 			return strings.Contains(name, input)
+// 		}
+
+// 		prompt := promptui.Select{
+// 			Label:     message,
+// 			Items:     intervals,
+// 			Templates: templates,
+// 			Size:      4,
+// 			Searcher:  searcher,
+// 		}
+
+// 		choice, _, err := prompt.Run()
+// 		if err != nil {
+// 			l.Fatal(err)
+// 		}
+
+// 		if choice == 0 {
+// 			break
+// 		} else {
+// 			chosen = append(chosen)
+// 		}
+// 	}
+
+// }
+
+func extractDialog(v *ffmpeg.Video, c ffmpeg.Configuration) {
 	_, err := v.ExtractSubtitles(c)
 	if err != nil {
 		return
@@ -300,6 +416,7 @@ func toInterval(chapter ffmpeg.Chapter) ffmpeg.Interval {
 	return ffmpeg.Interval{
 		Start: zero.Add(start).Format(timestampFormat),
 		End:   zero.Add(end).Format(timestampFormat),
+		Title: chapter.Tags.Title,
 	}
 }
 
@@ -349,7 +466,7 @@ func requestMultipleInts(message string, min, max int) []int {
 	panic("this is impossible")
 }
 
-func IsDirectory(path string) (bool, error) {
+func isDirectory(path string) (bool, error) {
 	fileInfo, err := os.Stat(path)
 	l.Printlnf("Hey you %s", fileInfo.Name())
 	if err != nil {

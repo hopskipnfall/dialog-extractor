@@ -181,4 +181,5 @@ func (v *Video) mp3ScratchPath(c Configuration) string {
 type Interval struct {
 	Start string
 	End   string
+	Title string
 }
