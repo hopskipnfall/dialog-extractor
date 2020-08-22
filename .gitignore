@@ -11,8 +11,8 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
+output/
 .tmp/
-out/
 log.txt
 testdata/
 

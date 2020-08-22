@@ -51,6 +51,11 @@ func main() {
 		l.Fatal(err)
 	}
 
+	// TODO: BEFORE
+	if _, err := os.Stat(outDir); os.IsNotExist(err) {
+		os.Mkdir(outDir, 0755)
+	}
+
 	if isDir {
 		processFolder(inputPath)
 	} else {
@@ -65,14 +70,6 @@ func processFolder(folderPath string) {
 	files, err := ioutil.ReadDir(folderPath)
 	if err != nil {
 		log.Fatal(err)
-	}
-
-	// Create directories if needed.
-	if _, err := os.Stat(tmpDir); os.IsNotExist(err) {
-		os.Mkdir(tmpDir, 0755)
-	}
-	if _, err := os.Stat("./out/"); os.IsNotExist(err) {
-		os.Mkdir("./out/", 0755)
 	}
 
 	// var paths []string
@@ -135,14 +132,16 @@ func processFolder(folderPath string) {
 			video: cur,
 			config: ffmpeg.Configuration{
 				SkippedChapters: c,
-				Audio:           aStreams[0],
-				Subtitles:       sStreams[0],
+				Audio:           aStreams[1],
+				Subtitles:       sStreams[1],
 				TempDir:         tmpDir,
 				OutputDir:       outDir,
 			}})
 	}
 	for _, fsdk := range connf {
-		extractDialog(fsdk.video, fsdk.config)
+		if err := extractFromVideo(fsdk.video, fsdk.config); err != nil {
+			l.Fatal(fmt.Sprintf("Failed to migrate video: %s", err))
+		}
 	}
 }
 
@@ -290,6 +289,74 @@ func selectAudioTrack(s []ffmpeg.Stream, promptMessage, selectedLabel string) ff
 		l.Fatal(err)
 	}
 	return s[choice]
+}
+
+func extractFromVideo(v *ffmpeg.Video, c ffmpeg.Configuration) error {
+	// Create temp dir.
+	if _, err := os.Stat(c.TempDir); os.IsNotExist(err) {
+		os.Mkdir(c.TempDir, 0755)
+	}
+
+	if err := v.LogFullFileInfo(); err != nil {
+		return err
+	}
+
+	// Streams/chapters already selected here.
+
+	if _, err := v.ExtractSubtitles(c); err != nil {
+		return err
+	}
+
+	comb := readAndCombineSubtitles(c.TempDir + "subs.srt")
+	comb = subtractChapters(comb, c.SkippedChapters)
+
+	// Create progress bar.
+	bar := pb.ProgressBarTemplate(progressBarTemplate).Start(len(comb) + 3)
+
+	bar.Set("current_action", "Copying audio")
+	if _, err := v.ExtractAudio(c); err != nil {
+		return err
+	}
+	bar.Increment()
+
+	fragmentList := ""
+	for i := 0; i < len(comb); i++ {
+		cur := comb[i]
+		fname := "shard-" + fmt.Sprint(i) + ".mp3"
+		fragmentList = fragmentList + "file '" + fname + "'" + "\n"
+		bar.Set("current_action", fmt.Sprintf("Splitting audio (%d/%d)", i+1, len(comb)))
+		if _, err := v.ExtractAudioFromInterval(c, cur, c.TempDir+fname); err != nil {
+			return err
+		}
+		bar.Increment()
+	}
+
+	// Write all fragment filenames to a text file.
+	if err := ioutil.WriteFile(c.TempDir+"output.txt", []byte(fragmentList), 0644); err != nil {
+		return err
+	}
+
+	// Combine all fragments into one file.
+	bar.Set("current_action", "Joining audio fragments")
+	audioOutPath := videoPathRegex.ReplaceAllString(v.Path, `$1.mp3`)
+	if _, err := v.CatenateAudioFiles(c, c.TempDir+audioOutPath); err != nil {
+		return err
+	}
+	bar.Increment()
+
+	// Re-encode output file to repair any errors from catenation.
+	bar.Set("current_action", "Re-encoding audio")
+	if _, err := v.ReEncodeAudio(c, c.TempDir+audioOutPath, c.OutputDir+audioOutPath); err != nil {
+		return err
+	}
+	bar.Increment()
+	bar.Finish()
+
+	// Delete temp dir.
+	os.RemoveAll(c.TempDir)
+
+	l.Printlnf("Created file %s", c.TempDir+audioOutPath)
+	return nil
 }
 
 func processOneFile(vidPath string) {
