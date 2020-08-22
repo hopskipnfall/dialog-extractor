@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -72,15 +73,6 @@ func processFolder(folderPath string) {
 		log.Fatal(err)
 	}
 
-	// var paths []string
-	// for _, f := range files {
-	// 	cur := filepath.Join(folderPath, f.Name())
-	// 	for _, ext := range supportedFormats {
-	// 		if strings.HasSuffix(cur, "."+ext) {
-	// 			paths = append(paths, cur)
-	// 		}
-	// 	}
-	// }
 	var videos []*ffmpeg.Video
 	for _, f := range files {
 		cur := filepath.Join(folderPath, f.Name())
@@ -119,21 +111,24 @@ func processFolder(folderPath string) {
 			}
 		}
 
-		aStreams, err := cur.GetAudioStreams()
+		l.Println()
+		aTrack, err := selectAudioTrack(cur, "Select the audio track to use:", "Selected audio track:")
 		if err != nil {
-			l.Fatal(err)
+			l.Fatal(err.Error())
 		}
-		sStreams, err := cur.GetSubtitleStreams()
+
+		l.Println()
+		sTrack, err := selectSubtitleTrack(cur, "Select the audio track to use:", "Selected subtitle track:")
 		if err != nil {
-			l.Fatal(err)
+			l.Fatal(err.Error())
 		}
 
 		connf = append(connf, confconf{
 			video: cur,
 			config: ffmpeg.Configuration{
 				SkippedChapters: c,
-				Audio:           aStreams[1],
-				Subtitles:       sStreams[1],
+				Audio:           *aTrack,
+				Subtitles:       *sTrack,
 				TempDir:         tmpDir,
 				OutputDir:       outDir,
 			}})
@@ -264,7 +259,19 @@ func selectChapterSummary(cs []chapterSummary) []chapterSummary {
 	return out
 }
 
-func selectAudioTrack(s []ffmpeg.Stream, promptMessage, selectedLabel string) ffmpeg.Stream {
+func selectAudioTrack(v *ffmpeg.Video, promptMessage, selectedLabel string) (*ffmpeg.Stream, error) {
+	s, err := v.GetAudioStreams()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(s) == 0 {
+		return nil, errors.New("no audio tracks found")
+	} else if len(s) == 1 {
+		l.Printlnf("Found one audio track: %s (%s)", s[0].Tags.Title, s[0].Tags.Language)
+		return &s[0], err
+	}
+
 	templates := &promptui.SelectTemplates{
 		Label:    "{{ . }}",
 		Active:   "\U0001F336 {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
@@ -286,9 +293,47 @@ func selectAudioTrack(s []ffmpeg.Stream, promptMessage, selectedLabel string) ff
 
 	choice, _, err := prompt.Run()
 	if err != nil {
-		l.Fatal(err)
+		return nil, err
 	}
-	return s[choice]
+	return &s[choice], nil
+}
+
+func selectSubtitleTrack(v *ffmpeg.Video, promptMessage, selectedLabel string) (*ffmpeg.Stream, error) {
+	s, err := v.GetSubtitleStreams()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(s) == 0 {
+		return nil, errors.New("no subtitle tracks found")
+	} else if len(s) == 1 {
+		l.Printlnf("Found one subtitle track: %s (%s)", s[0].Tags.Title, s[0].Tags.Language)
+		return &s[0], err
+	}
+
+	templates := &promptui.SelectTemplates{
+		Label:    "{{ . }}",
+		Active:   "\U0001F336 {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
+		Inactive: "  {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
+		Selected: "Selected subtitle track: {{ .Tags.Title | red | cyan }}",
+		Details: `
+--------- Subtitle Track ----------
+{{ "Name:" | faint }}	{{ .Tags.Title }}
+{{ "Codec:" | faint }}	{{ .CodecLongName }}`,
+	}
+
+	prompt := promptui.Select{
+		Label:     promptMessage,
+		Items:     s,
+		Templates: templates,
+		Size:      4,
+	}
+
+	choice, _, err := prompt.Run()
+	if err != nil {
+		return nil, err
+	}
+	return &s[choice], nil
 }
 
 func extractFromVideo(v *ffmpeg.Video, c ffmpeg.Configuration) error {
@@ -300,8 +345,6 @@ func extractFromVideo(v *ffmpeg.Video, c ffmpeg.Configuration) error {
 	if err := v.LogFullFileInfo(); err != nil {
 		return err
 	}
-
-	// Streams/chapters already selected here.
 
 	if _, err := v.ExtractSubtitles(c); err != nil {
 		return err
@@ -379,55 +422,19 @@ func processOneFile(vidPath string) {
 		os.Mkdir(c.OutputDir, 0755)
 	}
 
-	s, err := v.GetAudioStreams()
-	if err != nil {
-		l.Fatal(err.Error())
-	}
-
-	if len(s) == 0 {
-		l.Fatal("no audio tracks found")
-	} else if len(s) == 1 {
-		l.Printlnf("Found one audio track: %s (%s)", s[0].Tags.Title, s[0].Tags.Language)
-		c.Audio = s[0]
-	} else {
-		c.Audio = selectAudioTrack(s, "Select the audio track to use:", "Selected audio track:")
-	}
-
-	s, err = v.GetSubtitleStreams()
-	if err != nil {
-		l.Fatal(err.Error())
-	}
 	l.Println()
-	if len(s) == 0 {
-		l.Fatal("no subtitle tracks found")
-	} else if len(s) == 1 {
-		l.Printlnf("Found one subtitle track: %s (%s)", s[0].Tags.Title, s[0].Tags.Language)
-		c.Subtitles = s[0]
-	} else {
-		templates := &promptui.SelectTemplates{
-			Label:    "{{ . }}",
-			Active:   "\U0001F336 {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
-			Inactive: "  {{ .Tags.Title | cyan }} ({{ .Tags.Language | red }})",
-			Selected: "Selected subtitle track: {{ .Tags.Title | red | cyan }}",
-			Details: `
---------- Subtitle Track ----------
-{{ "Name:" | faint }}	{{ .Tags.Title }}
-{{ "Codec:" | faint }}	{{ .CodecLongName }}`,
-		}
-
-		prompt := promptui.Select{
-			Label:     "Select the subtitle track to use:",
-			Items:     s,
-			Templates: templates,
-			Size:      4,
-		}
-
-		choice, _, err := prompt.Run()
-		if err != nil {
-			l.Fatal(err)
-		}
-		c.Subtitles = s[choice]
+	track, err := selectAudioTrack(v, "Select the audio track to use:", "Selected audio track:")
+	if err != nil {
+		l.Fatal(err.Error())
 	}
+	c.Audio = *track
+
+	l.Println()
+	track, err = selectSubtitleTrack(v, "Select the audio track to use:", "Selected subtitle track:")
+	if err != nil {
+		l.Fatal(err.Error())
+	}
+	c.Subtitles = *track
 
 	l.Println()
 	info, err := v.InfoStruct()
@@ -451,8 +458,43 @@ func processOneFile(vidPath string) {
 		c.SkippedChapters = chaps
 	}
 
-	extractDialog(v, *c)
+	extractFromVideo(v, *c)
 }
+
+// func downloadFfmpeg(url string) error {
+// 	if runtime.GOOS == "windows" {
+// 		fmt.Println("Hello from Windows")
+// 	}
+
+// 	filepath := "none"
+
+// 	// Create the file
+// 	out, err := os.Create(filepath)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	defer out.Close()
+
+// 	// Get the data
+// 	resp, err := http.Get(url)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	defer resp.Body.Close()
+
+// 	// Check server response
+// 	if resp.StatusCode != http.StatusOK {
+// 		return fmt.Errorf("bad status: %s", resp.Status)
+// 	}
+
+// 	// Writer the body to file
+// 	_, err = io.Copy(out, resp.Body)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	return nil
+// }
 
 // func selectMultipleChapters(options []ffmpeg.Chapter, message string) []ffmpeg.Chapter {
 // 	var chosen []ffmpeg.Chapter
@@ -503,95 +545,6 @@ func processOneFile(vidPath string) {
 // 	}
 
 // }
-
-func extractDialog(v *ffmpeg.Video, c ffmpeg.Configuration) {
-	_, err := v.ExtractSubtitles(c)
-	if err != nil {
-		return
-	}
-
-	comb := readAndCombineSubtitles(c.TempDir + "subs.srt")
-	comb = subtractChapters(comb, c.SkippedChapters)
-
-	// Create progress bar.
-	bar := pb.ProgressBarTemplate(progressBarTemplate).Start(len(comb) + 3)
-
-	bar.Set("current_action", "Copying audio")
-	_, err = v.ExtractAudio(c)
-	bar.Increment()
-
-	outFile := ""
-	for i := 0; i < len(comb); i++ {
-		cur := comb[i]
-		fname := "shard-" + fmt.Sprint(i) + ".mp3"
-		outFile = outFile + "file '" + fname + "'" + "\n"
-		bar.Set("current_action", fmt.Sprintf("Splitting audio (%d/%d)", i+1, len(comb)))
-		_, err = v.ExtractAudioFromInterval(c, cur, c.TempDir+fname)
-		if err != nil {
-			return
-		}
-		bar.Increment()
-	}
-
-	// Write all fragment filenames to a text file.
-	if err := ioutil.WriteFile(c.TempDir+"output.txt", []byte(outFile), 0644); err != nil {
-		l.Fatal(err.Error())
-	}
-
-	// Combine all fragments into one file.
-	bar.Set("current_action", "Joining audio fragments")
-	audioOutPath := videoPathRegex.ReplaceAllString(v.Path, `$1.mp3`)
-	if _, err = v.CatenateAudioFiles(c, c.TempDir+audioOutPath); err != nil {
-		l.Fatal(err.Error())
-	}
-	bar.Increment()
-
-	// Re-encode output file to repair any errors from catenation.
-	bar.Set("current_action", "Re-encoding audio")
-	if _, err = v.ReEncodeAudio(c, c.TempDir+audioOutPath, c.OutputDir+audioOutPath); err != nil {
-		l.Fatal(err.Error())
-	}
-	bar.Increment()
-	bar.Finish()
-
-	// Delete temp dir.
-	// os.RemoveAll(c.TempDir)
-
-	l.Printlnf("Action completed. Created file %s", c.TempDir+audioOutPath)
-}
-
-func subtractChapters(intervals []ffmpeg.Interval, chapters []ffmpeg.Chapter) []ffmpeg.Interval {
-	if len(chapters) == 0 {
-		return intervals
-	}
-
-	wip := intervals
-
-	for j := 0; j < len(chapters); j++ {
-		var rev []ffmpeg.Interval
-		chap := toInterval(chapters[j])
-		for i := 0; i < len(wip); i++ {
-			cur := wip[i]
-			if cur.Start > chap.Start && cur.Start < chap.End {
-				cur = ffmpeg.Interval{
-					Start: chap.End,
-					End:   cur.End,
-				}
-			}
-			if cur.End > chap.Start && cur.End < chap.End {
-				cur = ffmpeg.Interval{
-					Start: cur.Start,
-					End:   chap.Start,
-				}
-			}
-			if cur.Start < cur.End {
-				rev = append(rev, cur)
-			}
-		}
-		wip = rev
-	}
-	return wip
-}
 
 func readAndCombineSubtitles(subPath string) []ffmpeg.Interval {
 	file, err := os.Open(subPath)
