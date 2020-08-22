@@ -546,6 +546,39 @@ func processOneFile(vidPath string) {
 
 // }
 
+func subtractChapters(intervals []ffmpeg.Interval, chapters []ffmpeg.Chapter) []ffmpeg.Interval {
+	if len(chapters) == 0 {
+		return intervals
+	}
+
+	wip := intervals
+
+	for j := 0; j < len(chapters); j++ {
+		var rev []ffmpeg.Interval
+		chap := toInterval(chapters[j])
+		for i := 0; i < len(wip); i++ {
+			cur := wip[i]
+			if cur.Start > chap.Start && cur.Start < chap.End {
+				cur = ffmpeg.Interval{
+					Start: chap.End,
+					End:   cur.End,
+				}
+			}
+			if cur.End > chap.Start && cur.End < chap.End {
+				cur = ffmpeg.Interval{
+					Start: cur.Start,
+					End:   chap.Start,
+				}
+			}
+			if cur.Start < cur.End {
+				rev = append(rev, cur)
+			}
+		}
+		wip = rev
+	}
+	return wip
+}
+
 func readAndCombineSubtitles(subPath string) []ffmpeg.Interval {
 	file, err := os.Open(subPath)
 	if err != nil {
