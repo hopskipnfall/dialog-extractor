@@ -65,6 +65,14 @@ func processFolder(folderPath string) {
 		log.Fatal(err)
 	}
 
+	// Create directories if needed.
+	if _, err := os.Stat("./.tmp/"); os.IsNotExist(err) {
+		os.Mkdir("./.tmp/", 0755)
+	}
+	if _, err := os.Stat("./out/"); os.IsNotExist(err) {
+		os.Mkdir("./out/", 0755)
+	}
+
 	// var paths []string
 	// for _, f := range files {
 	// 	cur := filepath.Join(folderPath, f.Name())
@@ -85,7 +93,55 @@ func processFolder(folderPath string) {
 	}
 
 	sum := buildChapterSummary(videos)
-	selectChapterSummary(sum)
+	excludedChapters := selectChapterSummary(sum)
+
+	type confconf struct {
+		config ffmpeg.Configuration
+		video  *ffmpeg.Video
+	}
+
+	var connf []confconf
+	for i := 0; i < len(videos); i++ {
+		cur := videos[i]
+		info, err := cur.InfoStruct()
+		if err != nil {
+			l.Fatal(err)
+		}
+		var c []ffmpeg.Chapter
+		for _, k := range info.Chapters {
+			included := false
+			for _, f := range excludedChapters {
+				if k.Tags.Title == f.Title {
+					included = true
+				}
+			}
+			if included {
+				c = append(c, k)
+			}
+		}
+
+		aStreams, err := cur.GetAudioStreams()
+		if err != nil {
+			l.Fatal(err)
+		}
+		sStreams, err := cur.GetSubtitleStreams()
+		if err != nil {
+			l.Fatal(err)
+		}
+
+		connf = append(connf, confconf{
+			video: cur,
+			config: ffmpeg.Configuration{
+				SkippedChapters: c,
+				Audio:           aStreams[0],
+				Subtitles:       sStreams[0],
+				TempDir:         "./.tmp/",
+				OutputDir:       "./out/",
+			}})
+	}
+	for _, fsdk := range connf {
+		extractDialog(fsdk.video, fsdk.config)
+	}
 }
 
 func buildChapterSummary(videos []*ffmpeg.Video) []chapterSummary {
@@ -140,6 +196,9 @@ type chapterSummary struct {
 }
 
 func selectChapterSummary(cs []chapterSummary) []chapterSummary {
+	if len(cs) == 0 {
+		return []chapterSummary{}
+	}
 	type wrapped struct {
 		Checkbox    string
 		Description string
@@ -427,7 +486,7 @@ func extractDialog(v *ffmpeg.Video, c ffmpeg.Configuration) {
 	bar.Finish()
 
 	// Delete temp dir.
-	os.RemoveAll(c.TempDir)
+	// os.RemoveAll(c.TempDir)
 
 	l.Printlnf("Action completed. Created file %s", c.TempDir+audioOutPath)
 }
@@ -598,7 +657,7 @@ func requestMultipleInts(message string, min, max int) []int {
 
 func isDirectory(path string) (bool, error) {
 	fileInfo, err := os.Stat(path)
-	l.Printlnf("Hey you %s", fileInfo.Name())
+	// l.Printlnf("Hey you %s", fileInfo.Name())
 	if err != nil {
 		return false, err
 	}

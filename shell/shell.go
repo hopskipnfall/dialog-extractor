@@ -12,7 +12,7 @@ func ExecuteCommand(l *logger.Logger, name string, arg ...string) ([]byte, error
 	// l.Println("Executing command: " + cmd.String())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		l.Printlnf("Command failed with error: %v", err)
+		l.Printlnf("Failed executing command: %s\n with error: %v", cmd.String(), err)
 		l.Println("Output: " + string(out))
 	}
 
