@@ -9,20 +9,22 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"./ffmpeg"
 	"./logger"
+	"./shell"
 	"github.com/cheggaaa/pb/v3"
 	"github.com/manifoldco/promptui"
 )
 
 const (
-
 	// Format for SRT timestamps.
 	timestampFormat = "15:04:05.000"
+
+	tmpDir = "./.tmp/"
+	outDir = "./output/"
 )
 
 var (
@@ -66,8 +68,8 @@ func processFolder(folderPath string) {
 	}
 
 	// Create directories if needed.
-	if _, err := os.Stat("./.tmp/"); os.IsNotExist(err) {
-		os.Mkdir("./.tmp/", 0755)
+	if _, err := os.Stat(tmpDir); os.IsNotExist(err) {
+		os.Mkdir(tmpDir, 0755)
 	}
 	if _, err := os.Stat("./out/"); os.IsNotExist(err) {
 		os.Mkdir("./out/", 0755)
@@ -135,8 +137,8 @@ func processFolder(folderPath string) {
 				SkippedChapters: c,
 				Audio:           aStreams[0],
 				Subtitles:       sStreams[0],
-				TempDir:         "./.tmp/",
-				OutputDir:       "./out/",
+				TempDir:         tmpDir,
+				OutputDir:       outDir,
 			}})
 	}
 	for _, fsdk := range connf {
@@ -298,8 +300,8 @@ func processOneFile(vidPath string) {
 	}
 
 	c := &ffmpeg.Configuration{
-		TempDir:   "./.tmp/",
-		OutputDir: "./out/",
+		TempDir:   tmpDir,
+		OutputDir: outDir,
 	}
 
 	// Create directories if needed.
@@ -374,7 +376,7 @@ func processOneFile(vidPath string) {
 			ivl := toInterval(cur)
 			l.Printlnf("\tOption %d: %s\t(%s - %s)", i, cur.Tags.Title, ivl.Start, ivl.End)
 		}
-		choices := requestMultipleInts("Choose chapters that should be ignored (comma-separated): ", 0, len(info.Chapters)-1)
+		choices := shell.RequestMultipleInts(l, "Choose chapters that should be ignored (comma-separated): ", 0, len(info.Chapters)-1)
 		var chaps []ffmpeg.Chapter
 		for i := 0; i < len(choices); i++ {
 			chaps = append(chaps, info.Chapters[choices[i]])
@@ -607,52 +609,6 @@ func toInterval(chapter ffmpeg.Chapter) ffmpeg.Interval {
 		End:   zero.Add(end).Format(timestampFormat),
 		Title: chapter.Tags.Title,
 	}
-}
-
-// requestInt asks the user for a bounded number using stdio.
-func requestInt(message string, min, max int) int {
-	for true {
-		l.Print(message)
-		reader := bufio.NewReader(os.Stdin)
-		text, _ := reader.ReadString('\n')
-		text = strings.TrimSpace(text)
-		choice, err := strconv.Atoi(text)
-		if err != nil || choice < min || choice > max {
-			l.Println("illegal choice, try again.")
-		} else {
-			return choice
-		}
-	}
-	panic("this is impossible")
-}
-
-// requestInt asks the user for a bounded number using stdio.
-func requestMultipleInts(message string, min, max int) []int {
-	for true {
-		l.Print(message)
-		reader := bufio.NewReader(os.Stdin)
-		text, _ := reader.ReadString('\n')
-		if text == "" {
-			return []int{}
-		}
-
-		var out []int
-		valid := true
-		choices := strings.Split(text, ",")
-		for i := 0; i < len(choices); i++ {
-			choice, err := strconv.Atoi(strings.TrimSpace(choices[i]))
-			if err != nil || choice < min || choice > max {
-				l.Println("illegal choice, try again.")
-				valid = false
-			} else {
-				out = append(out, choice)
-			}
-		}
-		if valid {
-			return out
-		}
-	}
-	panic("this is impossible")
 }
 
 func isDirectory(path string) (bool, error) {
