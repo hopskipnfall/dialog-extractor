@@ -1,3 +1,7 @@
+# DEPRECATED
+
+Please see https://github.com/hopskipnfall/dialog, which is a cross-platform desktop app that accomplishes the same thing (and more).
+
 # dialog-extractor
 Lightweight tool to extract dialog audio from videos using subtitles for dialog timing reference.
 
